@@ -1628,6 +1628,14 @@ static void process_args(int argc, char **argv, ARGS **preprocessor_args,
 			continue;
 		}
 
+		/* If we're being called as distcc and the first argument is
+		   not a source file, it's treated as the compiler by distcc,
+		   so we treat it the same */
+		if (i == 1 && strcmp(basename(argv[0]), "distcc") == 0 && !language_for_file(argv[i])) {
+			args_add(stripped_args, argv[i]);
+			continue;
+		}
+
 		if (input_file) {
 			if (language_for_file(argv[i])) {
 				cc_log("Multiple input files: %s and %s",

@@ -330,10 +330,16 @@ EOF
     cat <<'EOF' >prefix-remove.sh
 #!/bin/sh
 "$@"
-[ x$3 = x-o ] && rm $4
+while [ "$1" ]; do
+    if [ "$1" = "-o" ]; then
+        rm $2
+        exit $?
+    fi
+    shift
+done
 EOF
     chmod +x prefix-remove.sh
-    CCACHE_PREFIX=`pwd`/prefix-remove.sh $CCACHE_COMPILE -c test_no_obj.c
+    CCACHE_VERBOSE=1 CCACHE_PREFIX=`pwd`/prefix-remove.sh $CCACHE_COMPILE -c test_no_obj.c
     checkstat 'compiler produced no output' 1
 
     testname="empty object file"
@@ -343,7 +349,13 @@ EOF
     cat <<'EOF' >prefix-empty.sh
 #!/bin/sh
 "$@"
-[ x$3 = x-o ] && cp /dev/null $4
+while [ "$1" ]; do
+    if [ "$1" = "-o" ]; then
+        cp /dev/null $2
+        exit $?
+    fi
+    shift
+done
 EOF
     chmod +x prefix-empty.sh
     CCACHE_PREFIX=`pwd`/prefix-empty.sh $CCACHE_COMPILE -c test_empty_obj.c
@@ -394,6 +406,17 @@ link_suite() {
         base_tests
     else
         echo "Compiler ($COMPILER) not taken from PATH -- not running link test"
+    fi
+}
+
+distcc_suite() {
+    if [ "`which distcc`" != "" ]; then
+        CCACHE_COMPILE="$CCACHE distcc `which $COMPILER`"
+        DISTCC_HOSTS=localhost
+        export DISTCC_HOSTS
+        base_tests
+    else
+        echo "distcc not installed -- not running distcc test"
     fi
 }
 
@@ -1537,6 +1560,7 @@ all_suites="
 base
 link
 hardlink
+distcc
 cpp2
 nlevels4
 nlevels1
