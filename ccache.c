@@ -1774,6 +1774,13 @@ static void process_args(int argc, char **argv, ARGS **preprocessor_args,
 	}
 	if (compile_preprocessed_source_code) {
 		*compiler_args = args_copy(stripped_args);
+		if (explicit_language) {
+			char *p;
+			x_asprintf(&p, ".%s", i_extension);
+			args_add(*compiler_args, "-x");
+			args_add(*compiler_args, language_for_file(p));
+			free(p);
+		}
 	} else {
 		*compiler_args = args_copy(*preprocessor_args);
 	}
