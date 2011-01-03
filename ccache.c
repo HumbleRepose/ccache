@@ -265,13 +265,13 @@ temp_dir()
  * sublevels if needed. Caller frees.
  */
 static char *
-get_path_in_cache(const char *name, const char *suffix)
+get_path_in_cache(const char *name, const char *suffix, int cache_index)
 {
 	int i;
 	char *path;
 	char *result;
 
-	path = x_strdup(cache_dirs[0]);
+	path = x_strdup(cache_dirs[cache_index]);
 	for (i = 0; i < nlevels; ++i) {
 		char *p = format("%s/%c", path, name[i]);
 		free(path);
@@ -814,15 +814,15 @@ get_object_name_from_cpp(struct args *args, struct mdfour *hash)
 }
 
 static void
-update_cached_result_globals(struct file_hash *hash)
+update_cached_result_globals(struct file_hash *hash, int cache_index)
 {
 	char *object_name;
 
 	object_name = format_hash_as_string(hash->hash, hash->size);
 	cached_obj_hash = hash;
-	cached_obj = get_path_in_cache(object_name, ".o");
-	cached_stderr = get_path_in_cache(object_name, ".stderr");
-	cached_dep = get_path_in_cache(object_name, ".d");
+	cached_obj = get_path_in_cache(object_name, ".o", cache_index);
+	cached_stderr = get_path_in_cache(object_name, ".stderr", cache_index);
+	cached_dep = get_path_in_cache(object_name, ".d", cache_index);
 	stats_file = format("%s/%c/stats", cache_dirs[0], object_name[0]);
 	free(object_name);
 }
@@ -916,7 +916,8 @@ calculate_common_hash(struct args *args, struct mdfour *hash)
  * otherwise NULL. Caller frees.
  */
 static struct file_hash *
-calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
+calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode,
+                      int cache_index)
 {
 	int i;
 	char *manifest_name;
@@ -988,7 +989,7 @@ calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
 			return NULL;
 		}
 		manifest_name = hash_result(hash);
-		manifest_path = get_path_in_cache(manifest_name, ".manifest");
+		manifest_path = get_path_in_cache(manifest_name, ".manifest", cache_index);
 		free(manifest_name);
 		cc_log("Looking for object file hash in %s", manifest_path);
 		object_hash = manifest_get(manifest_path);
@@ -1824,12 +1825,13 @@ static void
 ccache(int argc, char *argv[])
 {
 	bool put_object_in_manifest = false;
-	struct file_hash *object_hash;
+	struct file_hash *object_hash = NULL;
 	struct file_hash *object_hash_from_manifest = NULL;
 	char *env;
 	struct mdfour common_hash;
 	struct mdfour direct_hash;
 	struct mdfour cpp_hash;
+	int i;
 
 	/* Arguments (except -E) to send to the preprocessor. */
 	struct args *preprocessor_args;
@@ -1891,27 +1893,32 @@ ccache(int argc, char *argv[])
 	direct_hash = common_hash;
 	if (enable_direct) {
 		cc_log("Trying direct lookup");
-		object_hash = calculate_object_hash(preprocessor_args, &direct_hash, 1);
-		if (object_hash) {
-			update_cached_result_globals(object_hash);
+		for (i = 0; i < num_cache_dirs; i++) {
+			if (!object_hash) {
+				object_hash = calculate_object_hash(preprocessor_args,
+				                                    &direct_hash, 1, i);
+			}
+			if (object_hash) {
+				update_cached_result_globals(object_hash, i);
 
-			/*
-			 * If we can return from cache at this point then do
-			 * so.
-			 */
-			from_cache(FROMCACHE_DIRECT_MODE, 0);
+				/*
+				 * If we can return from cache at this point then do
+				 * so.
+				 */
+				from_cache(FROMCACHE_DIRECT_MODE, 0);
 
-			/*
-			 * Wasn't able to return from cache at this point.
-			 * However, the object was already found in manifest,
-			 * so don't readd it later.
-			 */
-			put_object_in_manifest = false;
+				/*
+				 * Wasn't able to return from cache at this point.
+				 * However, the object was already found in manifest,
+				 * so don't readd it later.
+				 */
+				put_object_in_manifest = false;
 
-			object_hash_from_manifest = object_hash;
-		} else {
-			/* Add object to manifest later. */
-			put_object_in_manifest = true;
+				object_hash_from_manifest = object_hash;
+			} else {
+				/* Add object to manifest later. */
+				put_object_in_manifest = true;
+			}
 		}
 	}
 
@@ -1921,11 +1928,10 @@ ccache(int argc, char *argv[])
 	 */
 	cpp_hash = common_hash;
 	cc_log("Running preprocessor");
-	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0);
+	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0, 0);
 	if (!object_hash) {
 		fatal("internal error: object hash from cpp returned NULL");
 	}
-	update_cached_result_globals(object_hash);
 
 	if (object_hash_from_manifest
 	    && !file_hashes_equal(object_hash_from_manifest, object_hash)) {
@@ -1952,8 +1958,12 @@ ccache(int argc, char *argv[])
 		put_object_in_manifest = true;
 	}
 
-	/* if we can return from cache at this point then do */
-	from_cache(FROMCACHE_CPP_MODE, put_object_in_manifest);
+	for (i = 0; i < num_cache_dirs; i++) {
+		update_cached_result_globals(object_hash, i);
+
+		/* if we can return from cache at this point then do */
+		from_cache(FROMCACHE_CPP_MODE, put_object_in_manifest);
+	}
 
 	if (getenv("CCACHE_READONLY")) {
 		cc_log("Read-only mode; running real compiler");
@@ -1970,6 +1980,8 @@ ccache(int argc, char *argv[])
 		args_add_prefix(compiler_args, p);
 	}
 
+	update_cached_result_globals(object_hash, 0);
+
 	/* run real compiler, sending output to cache */
 	to_cache(compiler_args);
 
@@ -1985,7 +1997,7 @@ ccache(int argc, char *argv[])
 static void
 check_cache_dir(void)
 {
-	if (!cache_dirs[0]) {
+	if (num_cache_dirs == 0) {
 		fatal("Unable to determine cache directory");
 	}
 }
