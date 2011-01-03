@@ -70,7 +70,8 @@ static const char USAGE_TEXT[] =
 char *current_working_dir = NULL;
 
 /* the base cache directory */
-char *cache_dir = NULL;
+char **cache_dirs = NULL;
+int num_cache_dirs = 0;
 
 /* the debug logfile name, if set */
 char *cache_logfile = NULL;
@@ -254,7 +255,7 @@ temp_dir()
 	if (path) return path;  /* Memoize */
 	path = getenv("CCACHE_TEMPDIR");
 	if (!path) {
-		path = format("%s/tmp", cache_dir);
+		path = format("%s/tmp", cache_dirs[0]);
 	}
 	return path;
 }
@@ -270,7 +271,7 @@ get_path_in_cache(const char *name, const char *suffix)
 	char *path;
 	char *result;
 
-	path = x_strdup(cache_dir);
+	path = x_strdup(cache_dirs[0]);
 	for (i = 0; i < nlevels; ++i) {
 		char *p = format("%s/%c", path, name[i]);
 		free(path);
@@ -680,9 +681,9 @@ to_cache(struct args *args)
 	 * This can be almost anywhere, but might as well do it near the end
 	 * as if we exit early we save the stat call
 	 */
-	if (create_cachedirtag(cache_dir) != 0) {
+	if (create_cachedirtag(cache_dirs[0]) != 0) {
 		cc_log("Failed to create %s/CACHEDIR.TAG (%s)\n",
-		        cache_dir, strerror(errno));
+		        cache_dirs[0], strerror(errno));
 		stats_update(STATS_ERROR);
 		failed();
 	}
@@ -822,7 +823,7 @@ update_cached_result_globals(struct file_hash *hash)
 	cached_obj = get_path_in_cache(object_name, ".o");
 	cached_stderr = get_path_in_cache(object_name, ".stderr");
 	cached_dep = get_path_in_cache(object_name, ".d");
-	stats_file = format("%s/%c/stats", cache_dir, object_name[0]);
+	stats_file = format("%s/%c/stats", cache_dirs[0], object_name[0]);
 	free(object_name);
 }
 
@@ -1750,8 +1751,14 @@ out:
 void
 cc_reset(void)
 {
+	int i;
 	free(current_working_dir); current_working_dir = NULL;
-	free(cache_dir); cache_dir = NULL;
+	for (i = 0; i < num_cache_dirs; i++) {
+		free(cache_dirs[i]);
+	}
+	free(cache_dirs);
+	cache_dirs = NULL;
+	num_cache_dirs = 0;
 	cache_logfile = NULL;
 	base_dir = NULL;
 	args_free(orig_args); orig_args = NULL;
@@ -1978,7 +1985,7 @@ ccache(int argc, char *argv[])
 static void
 check_cache_dir(void)
 {
-	if (!cache_dir) {
+	if (!cache_dirs[0]) {
 		fatal("Unable to determine cache directory");
 	}
 }
@@ -2014,13 +2021,13 @@ ccache_main_options(int argc, char *argv[])
 
 		case 'c': /* --cleanup */
 			check_cache_dir();
-			cleanup_all(cache_dir);
+			cleanup_all(cache_dirs[0]);
 			printf("Cleaned cache\n");
 			break;
 
 		case 'C': /* --clear */
 			check_cache_dir();
-			wipe_all(cache_dir);
+			wipe_all(cache_dirs[0]);
 			printf("Cleared cache\n");
 			break;
 
@@ -2113,6 +2120,9 @@ ccache_main(int argc, char *argv[])
 {
 	char *p;
 	char *program_name;
+	char *cache_dir_str;
+	char *saved_cache_dir_str;
+	char *dir;
 
 	exitfn_init();
 	exitfn_add_nullary(stats_flush);
@@ -2134,13 +2144,22 @@ ccache_main(int argc, char *argv[])
 	}
 
 	current_working_dir = get_cwd();
-	cache_dir = getenv("CCACHE_DIR");
-	if (cache_dir) {
-		cache_dir = x_strdup(cache_dir);
+	cache_dir_str = getenv("CCACHE_DIR");
+	if (cache_dir_str) {
+		while ((dir = strtok_r(cache_dir_str, ":", &saved_cache_dir_str))) {
+			cache_dirs = (char**)x_realloc(cache_dirs,
+			                               (num_cache_dirs + 1) * sizeof(char *));
+			cache_dirs[num_cache_dirs] = dir;
+			num_cache_dirs++;
+			cache_dir_str = NULL;
+		}
 	} else {
 		const char *home_directory = get_home_directory();
 		if (home_directory) {
-			cache_dir = format("%s/.ccache", home_directory);
+			cache_dir_str = format("%s/.ccache", home_directory);
+			cache_dirs = (char**)x_malloc(sizeof(char *));
+			cache_dirs[0] = cache_dir_str;
+			num_cache_dirs = 1;
 		}
 	}
 

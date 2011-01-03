@@ -34,7 +34,8 @@
 #include <unistd.h>
 
 extern char *stats_file;
-extern char *cache_dir;
+extern char **cache_dirs;
+extern int num_cache_dirs;
 extern unsigned lock_staleness_limit;
 
 static struct counters *counter_updates;
@@ -223,8 +224,8 @@ stats_flush(void)
 		 * A NULL stats_file means that we didn't get past calculate_object_hash(),
 		 * so we just choose one of stats files in the 16 subdirectories.
 		 */
-		if (!cache_dir) return;
-		stats_dir = format("%s/%x", cache_dir, hash_from_int(getpid()) % 16);
+		if (!cache_dirs[0]) return;
+		stats_dir = format("%s/%x", cache_dirs[0], hash_from_int(getpid()) % 16);
 		stats_file = format("%s/stats", stats_dir);
 		free(stats_dir);
 	}
@@ -294,9 +295,9 @@ stats_summary(void)
 		char *fname;
 
 		if (dir == -1) {
-			fname = format("%s/stats", cache_dir);
+			fname = format("%s/stats", cache_dirs[0]);
 		} else {
-			fname = format("%s/%1x/stats", cache_dir, dir);
+			fname = format("%s/%1x/stats", cache_dirs[0], dir);
 		}
 
 		stats_read(fname, counters);
@@ -308,7 +309,7 @@ stats_summary(void)
 		}
 	}
 
-	printf("cache directory                     %s\n", cache_dir);
+	printf("cache directory                     %s\n", cache_dirs[0]);
 
 	/* and display them */
 	for (i = 0; stats_info[i].message; i++) {
@@ -338,13 +339,13 @@ stats_zero(void)
 	unsigned i;
 	char *fname;
 
-	fname = format("%s/stats", cache_dir);
+	fname = format("%s/stats", cache_dirs[0]);
 	x_unlink(fname);
 	free(fname);
 
 	for (dir = 0; dir <= 0xF; dir++) {
 		struct counters *counters = counters_init(STATS_END);
-		fname = format("%s/%1x/stats", cache_dir, dir);
+		fname = format("%s/%1x/stats", cache_dirs[0], dir);
 		if (lockfile_acquire(fname, lock_staleness_limit)) {
 			stats_read(fname, counters);
 			for (i = 0; stats_info[i].message; i++) {
@@ -390,7 +391,7 @@ stats_set_limits(long maxfiles, long maxsize)
 	for (dir = 0; dir <= 0xF; dir++) {
 		char *fname, *cdir;
 
-		cdir = format("%s/%1x", cache_dir, dir);
+		cdir = format("%s/%1x", cache_dirs[0], dir);
 		fname = format("%s/stats", cdir);
 		free(cdir);
 
