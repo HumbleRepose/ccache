@@ -916,8 +916,7 @@ calculate_common_hash(struct args *args, struct mdfour *hash)
  * otherwise NULL. Caller frees.
  */
 static struct file_hash *
-calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode,
-                      int cache_index)
+calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode)
 {
 	int i;
 	char *manifest_name;
@@ -989,15 +988,21 @@ calculate_object_hash(struct args *args, struct mdfour *hash, int direct_mode,
 			return NULL;
 		}
 		manifest_name = hash_result(hash);
-		manifest_path = get_path_in_cache(manifest_name, ".manifest", cache_index);
-		free(manifest_name);
-		cc_log("Looking for object file hash in %s", manifest_path);
-		object_hash = manifest_get(manifest_path);
-		if (object_hash) {
-			cc_log("Got object file hash from manifest");
-		} else {
-			cc_log("Did not find object file hash in manifest");
+		for (i = 0; i < num_cache_dirs; i++) {
+			manifest_path = get_path_in_cache(manifest_name, ".manifest", i);
+			cc_log("Looking for object file hash in %s", manifest_path);
+			object_hash = manifest_get(manifest_path);
+			if (object_hash) {
+				cc_log("Got object file hash from manifest");
+				break;
+			} else {
+				cc_log("Did not find object file hash in manifest");
+			}
 		}
+		// If we didn't find the object file hash in any of the manifests,
+		// set the manifest path back to the first one to update it later.
+		manifest_path = get_path_in_cache(manifest_name, ".manifest", 0);
+		free(manifest_name);
 	} else {
 		object_hash = get_object_name_from_cpp(args, hash);
 		cc_log("Got object file hash from preprocessor");
@@ -1890,15 +1895,13 @@ ccache(int argc, char *argv[])
 	calculate_common_hash(preprocessor_args, &common_hash);
 
 	/* try to find the hash using the manifest */
-	direct_hash = common_hash;
 	if (enable_direct) {
 		cc_log("Trying direct lookup");
-		for (i = 0; i < num_cache_dirs; i++) {
-			if (!object_hash) {
-				object_hash = calculate_object_hash(preprocessor_args,
-				                                    &direct_hash, 1, i);
-			}
-			if (object_hash) {
+		direct_hash = common_hash;
+		object_hash = calculate_object_hash(preprocessor_args,
+		                                    &direct_hash, 1);
+		if (object_hash) {
+			for (i = 0; i < num_cache_dirs; i++) {
 				update_cached_result_globals(object_hash, i);
 
 				/*
@@ -1906,19 +1909,19 @@ ccache(int argc, char *argv[])
 				 * so.
 				 */
 				from_cache(FROMCACHE_DIRECT_MODE, 0);
-
-				/*
-				 * Wasn't able to return from cache at this point.
-				 * However, the object was already found in manifest,
-				 * so don't readd it later.
-				 */
-				put_object_in_manifest = false;
-
-				object_hash_from_manifest = object_hash;
-			} else {
-				/* Add object to manifest later. */
-				put_object_in_manifest = true;
 			}
+
+			/*
+			 * Wasn't able to return from cache at this point.
+			 * However, the object was already found in manifest,
+			 * so don't readd it later.
+			 */
+			put_object_in_manifest = false;
+
+			object_hash_from_manifest = object_hash;
+		} else {
+			/* Add object to manifest later. */
+			put_object_in_manifest = true;
 		}
 	}
 
@@ -1928,7 +1931,7 @@ ccache(int argc, char *argv[])
 	 */
 	cpp_hash = common_hash;
 	cc_log("Running preprocessor");
-	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0, 0);
+	object_hash = calculate_object_hash(preprocessor_args, &cpp_hash, 0);
 	if (!object_hash) {
 		fatal("internal error: object hash from cpp returned NULL");
 	}
